@@ -87,10 +87,14 @@
               { original = pkgs.pkgsi686Linux.intel-media-driver.dev; replacement = patchedIHD32.dev; }
             ];
 
-            environment.sessionVariables = lib.mkIf cfg.vaapi {
+            environment.sessionVariables = {
+              # Fixes the vkcube / Vulkan app delay by forcing the Intel ICD
+              VK_ICD_FILENAMES = "/run/opengl-driver/share/vulkan/icd.d/intel_icd.x86_64.json" 
+                + lib.optionalString config.hardware.graphics.enable32Bit ":/run/opengl-driver-32/share/vulkan/icd.d/intel_icd.i686.json";
+            } // lib.optionalAttrs cfg.vaapi {
               LIBVA_DRIVER_NAME = "iHD";
+            };          
             };
-          };
         };
     };
 }
