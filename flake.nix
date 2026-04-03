@@ -15,10 +15,12 @@
 
       patchedMesa = pkgs.mesa.overrideAttrs (old: {
         patches = old.patches ++ [ mesaPatch ];
+        mesonFlags = old.mesonFlags ++ [ "-Dintel-virtio-experimental=true" ];
       });
 
       patchedMesa32 = pkgs.pkgsi686Linux.mesa.overrideAttrs (old: {
         patches = old.patches ++ [ mesaPatch ];
+        mesonFlags = old.mesonFlags ++ [ "-Dintel-virtio-experimental=true" ];
       });
 
       patchedIHD = pkgs.intel-media-driver.overrideAttrs (old: {
