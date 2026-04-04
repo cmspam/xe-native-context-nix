@@ -9,92 +9,59 @@
     };
   };
 
-  outputs = { self, nixpkgs, mesa-src, ... }:
+  outputs = { nixpkgs, mesa-src, ... }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       lib = pkgs.lib;
 
-      # Patched Mesa Logic
-      makePatchedMesa = mesaPkg: mesaPkg.overrideAttrs (old: {
-        pname = "mesa-xe-virtio";
-        version = "26.1.0-git";
-        src = mesa-src;
-        patches = (old.patches or [ ]) ++ [
-          (self + "/patches/mesa-01-xe-native-context-plus-iris-upload-fix.patch")
-        ];
-        mesonFlags = (old.mesonFlags or [ ]) ++ [
-          "-Dintel-virtio-experimental=true"
-        ];
-        nativeBuildInputs = (old.nativeBuildInputs or []) ++ [ 
-          pkgs.python3Packages.mako 
-          pkgs.python3Packages.pyyaml 
-        ];
-      });
+      # Important:
+      # Do NOT reference `self + "/patches/..."` here.
+      # We deliberately isolate only the patch files so unrelated
+      # edits in the repo do not perturb the package derivations.
+      patchSrc = builtins.path {
+        path = ./patches;
+        name = "xe-virtio-patches";
+        filter = path: type:
+          let
+            base = builtins.baseNameOf path;
+          in
+            type == "directory"
+            || base == "mesa-01-xe-native-context-plus-iris-upload-fix.patch"
+            || base == "intel-media-driver-xe-native-context.patch";
+      };
 
-      # Patched IHD Logic
-      makePatchedIHD = ihdPkg: ihdPkg.overrideAttrs (old: {
-        patches = (old.patches or [ ]) ++ [
-          (self + "/patches/intel-media-driver-xe-native-context.patch")
-        ];
-      });
+      patchedMesa = import ./pkgs/patched-mesa.nix {
+        inherit pkgs mesa-src patchSrc;
+        mesaPkg = pkgs.mesa;
+      };
 
-      patchedMesa = makePatchedMesa pkgs.mesa;
-      patchedMesa32 = makePatchedMesa pkgs.pkgsi686Linux.mesa;
-      patchedIHD = makePatchedIHD pkgs.intel-media-driver;
-      patchedIHD32 = makePatchedIHD pkgs.pkgsi686Linux.intel-media-driver;
+      patchedMesa32 = import ./pkgs/patched-mesa.nix {
+        inherit pkgs mesa-src patchSrc;
+        mesaPkg = pkgs.pkgsi686Linux.mesa;
+      };
 
+      patchedIHD = import ./pkgs/patched-ihd.nix {
+        inherit patchSrc;
+        ihdPkg = pkgs.intel-media-driver;
+      };
+
+      patchedIHD32 = import ./pkgs/patched-ihd.nix {
+        inherit patchSrc;
+        ihdPkg = pkgs.pkgsi686Linux.intel-media-driver;
+      };
+
+      xeVirtioModule = import ./modules/xe-virtio.nix {
+        inherit lib patchedMesa patchedMesa32 patchedIHD patchedIHD32;
+      };
     in {
       packages.${system} = {
         mesa = patchedMesa;
+        mesa32 = patchedMesa32;
         ihd = patchedIHD;
+        ihd32 = patchedIHD32;
       };
 
-      nixosModules.default = { config, pkgs, ... }:
-        let cfg = config.hardware.xe-virtio;
-        in {
-          options.hardware.xe-virtio = {
-            enable = lib.mkEnableOption "Intel Xe drm_native_context for virtio-gpu guests";
-            vaapi = lib.mkOption {
-              type = lib.types.bool;
-              default = true;
-            };
-          };
-
-          config = lib.mkIf cfg.enable {
-            hardware.graphics = {
-              enable = true;
-              enable32Bit = lib.mkDefault true;
-              package = patchedMesa;
-              extraPackages = lib.optionals cfg.vaapi [ patchedIHD pkgs.vpl-gpu-rt ];
-              extraPackages32 = lib.optionals (cfg.vaapi && config.hardware.graphics.enable32Bit) [ patchedIHD32 ];
-            };
-
-            # YOUR EXPLICIT REPLACEMENT LIST
-            system.replaceDependencies.replacements = [
-              { original = pkgs.mesa;           replacement = patchedMesa; }
-              { original = pkgs.mesa.out;       replacement = patchedMesa.out; }
-            ] ++ lib.optionals cfg.vaapi [
-              { original = pkgs.intel-media-driver;     replacement = patchedIHD; }
-              { original = pkgs.intel-media-driver.out; replacement = patchedIHD.out; }
-              { original = pkgs.intel-media-driver.dev; replacement = patchedIHD.dev; }
-            ] ++ lib.optionals config.hardware.graphics.enable32Bit [
-              { original = pkgs.pkgsi686Linux.mesa;     replacement = patchedMesa32; }
-              { original = pkgs.pkgsi686Linux.mesa.out; replacement = patchedMesa32.out; }
-            ] ++ lib.optionals (cfg.vaapi && config.hardware.graphics.enable32Bit) [
-              { original = pkgs.pkgsi686Linux.intel-media-driver;     replacement = patchedIHD32; }
-              { original = pkgs.pkgsi686Linux.intel-media-driver.out; replacement = patchedIHD32.out; }
-              { original = pkgs.pkgsi686Linux.intel-media-driver.dev; replacement = patchedIHD32.dev; }
-            ];
-
-            environment.sessionVariables = {
-              # Fixes the vkcube / Vulkan app delay by forcing the Intel ICD
-              VK_ICD_FILENAMES = "/run/opengl-driver/share/vulkan/icd.d/intel_icd.x86_64.json" 
-                + lib.optionalString config.hardware.graphics.enable32Bit ":/run/opengl-driver-32/share/vulkan/icd.d/intel_icd.i686.json";
-            } // lib.optionalAttrs cfg.vaapi {
-              LIBVA_DRIVER_NAME = "iHD";
-            };          
-            };
-        };
+      nixosModules.default = xeVirtioModule;
     };
 }
