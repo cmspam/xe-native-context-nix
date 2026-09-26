@@ -307,7 +307,7 @@ new file mode 100644
 index 0000000..0879945
 --- /dev/null
 +++ b/src/intel/dev/virtio/xe_virtio_ccmd.c
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,313 @@
 +/*
 + * Copyright 2025 Collabora, Ltd.
 + * SPDX-License-Identifier: MIT
@@ -359,7 +359,16 @@ index 0000000..0879945
 +      blob_flags |= VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE;
 +
 +   req.blob_id = p_atomic_inc_return(&dev->next_blob_id);
++   /* Mesa 26.2 added a blob_hints argument to vdrm_bo_create().  The uapi
++    * define lands in the same header at the same time, so it doubles as the
++    * feature test for the older five argument form.
++    */
++#ifdef DRM_VIRTGPU_BLOB_FLAG_HINT_DEFER_MAPPING
++   ret = vdrm_bo_create(dev->vdrm, args->size, blob_flags, req.blob_id, 0,
++                        &req.hdr);
++#else
 +   ret = vdrm_bo_create(dev->vdrm, args->size, blob_flags, req.blob_id, &req.hdr);
++#endif
 +   if (!ret)
 +      return EINVAL;
 +
@@ -894,3 +903,86 @@ index 9f7244c..4774ab8 100644
     } u;
  };
  
+
+diff --git a/src/gallium/drivers/iris/iris_bufmgr.c b/src/gallium/drivers/iris/iris_bufmgr.c
+index 0950ecd..e005c67 100644
+--- a/src/gallium/drivers/iris/iris_bufmgr.c
++++ b/src/gallium/drivers/iris/iris_bufmgr.c
+@@ -1302,7 +1302,7 @@ iris_bo_alloc(struct iris_bufmgr *bufmgr,
+          goto err_free;
+ 
+       if (!bufmgr->kmd_backend->gem_vm_bind(bo, flags))
+-         goto err_vm_alloc;
++         goto err_free;
+    }
+ 
+    bo->name = name;
+@@ -1330,10 +1330,6 @@ iris_bo_alloc(struct iris_bufmgr *bufmgr,
+ 
+    return bo;
+ 
+-err_vm_alloc:
+-   simple_mtx_lock(&bufmgr->lock);
+-   vma_free(bufmgr, bo->address, bo->size);
+-   simple_mtx_unlock(&bufmgr->lock);
+ err_free:
+    simple_mtx_lock(&bufmgr->lock);
+    bo_free(bo);
+@@ -1506,10 +1502,10 @@ iris_bo_gem_create_from_name(struct iris_bufmgr *bufmgr,
+       goto err_free;
+ 
+    if (!iris_bo_set_prime_fd(bo))
+-      goto err_vm_alloc;
++      goto err_free;
+ 
+    if (!bufmgr->kmd_backend->gem_vm_bind(bo, flags))
+-      goto err_vm_alloc;
++      goto err_free;
+ 
+    _mesa_hash_table_insert(bufmgr->handle_table, &bo->gem_handle, bo);
+    _mesa_hash_table_insert(bufmgr->name_table, &bo->real.global_name, bo);
+@@ -1520,8 +1516,6 @@ out:
+    simple_mtx_unlock(&bufmgr->lock);
+    return bo;
+ 
+-err_vm_alloc:
+-   vma_free(bufmgr, bo->address, bo->size);
+ err_free:
+    bo_free(bo);
+    simple_mtx_unlock(&bufmgr->lock);
+@@ -2059,7 +2053,7 @@ iris_bo_import_dmabuf(struct iris_bufmgr *bufmgr, int prime_fd,
+       goto err_free;
+ 
+    if (!bufmgr->kmd_backend->gem_vm_bind(bo, flags))
+-      goto err_vm_alloc;
++      goto err_free;
+ 
+    _mesa_hash_table_insert(bufmgr->handle_table, &bo->gem_handle, bo);
+ 
+@@ -2075,8 +2069,6 @@ out:
+ 
+    return bo;
+ 
+-err_vm_alloc:
+-   vma_free(bufmgr, bo->address, bo->size);
+ err_free:
+    bo_free(bo);
+    simple_mtx_unlock(&bufmgr->lock);
+@@ -2320,7 +2312,7 @@ intel_aux_map_buffer_alloc(void *driver_ctx, uint32_t size)
+       goto err_free;
+ 
+    if (!bufmgr->kmd_backend->gem_vm_bind(bo, 0))
+-      goto err_vm_alloc;
++      goto err_free;
+ 
+    simple_mtx_unlock(&bufmgr->lock);
+ 
+@@ -2336,8 +2328,6 @@ intel_aux_map_buffer_alloc(void *driver_ctx, uint32_t size)
+    buf->map = iris_bo_map(NULL, bo, MAP_WRITE | MAP_RAW);
+    return buf;
+ 
+-err_vm_alloc:
+-   vma_free(bufmgr, bo->address, bo->size);
+ err_free:
+    free(buf);
+    bo_free(bo);
